@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: modeling-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-modeling}
+      POSTGRES_USER: ${POSTGRES_USER:-modeling}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-modeling}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-modeling} -d ${POSTGRES_DB:-modeling}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ../backend
+    container_name: modeling-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-modeling}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-modeling}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-modeling}
+    ports:
+      - "18081:8080"
+
+  frontend:
+    build:
+      context: ../frontend
+    container_name: modeling-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "18080:80"
+
+volumes:
+  postgres_data:
