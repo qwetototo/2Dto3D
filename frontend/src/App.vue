@@ -19,7 +19,7 @@
     </div>
   </aside>
 
-  <main class="shell">
+  <main :class="['shell', { 'shell--preview': activeView === 'preview', 'shell--editor': activeView === 'editor' }]">
     <header class="topbar">
       <div>
         <p class="eyebrow">Vue3 + Spring Boot + PostgreSQL</p>

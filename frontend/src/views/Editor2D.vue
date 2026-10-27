@@ -1,43 +1,147 @@
 <template>
-  <section class="view active">
+  <section class="view active editor-screen">
     <div class="editor-layout">
-      <article class="panel tool-panel">
-        <h2>2D 编辑</h2>
-        <div class="tool-stack">
-          <button v-for="item in tools" :key="item.key" class="tool" :class="{ active: tool === item.key }" @click="tool = item.key">{{ item.label }}</button>
-        </div>
-        <label>当前小模型<select v-model="activeAssetId"><option v-for="asset in store.assets" :key="asset.id" :value="asset.id">{{ asset.name }}</option></select></label>
-        <button class="danger ghost" @click="deleteSelected">删除选中对象</button>
-        <button class="danger ghost" @click="resetCanvas">重置画布</button>
-        <button class="ghost" @click="resetPlan">重置为初始框架</button>
-        <div class="tool-row">
-          <button class="ghost" @click="zoomAt(1.15, canvasCenter())">放大</button>
-          <button class="ghost" @click="zoomAt(0.87, canvasCenter())">缩小</button>
-          <button class="ghost" @click="resetView">重置视图</button>
-        </div>
-        <button class="ghost" @click="downloadJson(`${store.activeFloor.name}-2d.json`, store.exportCurrent2d())">导出当前 2D</button>
-        <div class="file-state">{{ status }}</div>
-      </article>
       <article class="panel canvas-panel">
-        <div class="canvas-header">
-          <h2>2D 编辑画布</h2>
-          <span>{{ toolLabel }} · {{ Math.round(view.zoom * 100) }}%</span>
+        <div class="canvas-header editor-canvas-header">
+          <div class="editor-heading">
+            <span class="editor-kicker">平面图</span>
+            <strong>{{ store.project.name }} · {{ store.activeFloor.name }}</strong>
+          </div>
+          <label class="floor-switcher">
+            <span class="sr-only">当前楼层</span>
+            <select v-model="store.activeFloorId" aria-label="切换编辑楼层">
+              <option v-for="floor in store.floors" :key="floor.id" :value="floor.id">{{ floor.name }}</option>
+            </select>
+          </label>
+          <span class="zoom-indicator">{{ toolLabel }} <b>{{ Math.round(view.zoom * 100) }}%</b></span>
         </div>
-        <canvas
-          ref="canvasRef"
-          class="edit-canvas"
-          :class="{ panning: pan.active }"
-          width="1200"
-          height="680"
-          @click="onCanvasClick"
-          @dblclick="closeOuter"
-          @mousedown="onMouseDown"
-          @mousemove="onMouseMove"
-          @mouseleave="onMouseUp"
-          @mouseup="onMouseUp"
-          @wheel.prevent="onWheel"
-        ></canvas>
+        <div class="canvas-stage">
+          <div class="editor-tool-rail" role="toolbar" aria-label="绘图工具">
+            <template v-for="item in tools" :key="item.key">
+              <span v-if="item.key === 'asset'" class="tool-rail-divider" aria-hidden="true"></span>
+              <button
+                type="button"
+                class="tool-rail-button"
+                :class="{ active: tool === item.key }"
+                :aria-label="item.label"
+                :title="item.label"
+                :aria-pressed="tool === item.key"
+                @click="activateTool(item)"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path v-if="item.key === 'select'" d="M6 3.5 18.2 14l-5.4.8 2.7 5.2-2.5 1.3-2.8-5.2-3.5 4.2Z" />
+                  <path v-else-if="item.key === 'outer'" d="M4 5.5h16v13H4z M4 9h4 M16 18.5h4" />
+                  <path v-else-if="item.key === 'inner'" d="M5 5v14h14 M5 12h8 M13 8v8" />
+                  <path v-else-if="item.key === 'door'" d="M5 20V4h11v16 M8 20V8h8 M16 8a8 8 0 0 1 4 7" />
+                  <path v-else d="m12 3 8 4.5v9L12 21l-8-4.5v-9z M4 7.5l8 4.7 8-4.7 M12 12.2V21" />
+                </svg>
+                <span class="sr-only">{{ item.label }}</span>
+              </button>
+            </template>
+          </div>
+
+          <div v-if="showAssetPicker" class="asset-picker-popover" role="dialog" aria-label="选择已有小模型">
+            <div class="asset-picker-heading">
+              <strong>选择小模型</strong>
+              <button type="button" class="popover-close" aria-label="关闭小模型选择" @click="showAssetPicker = false">×</button>
+            </div>
+            <button
+              v-for="asset in store.assets"
+              :key="asset.id"
+              type="button"
+              class="asset-picker-option"
+              :class="{ selected: activeAssetId === asset.id }"
+              @click="chooseAsset(asset)"
+            >
+              <span class="asset-picker-mark" :style="{ '--asset-color': asset.color || '#6687c7' }">{{ asset.name?.slice(0, 1) || '模' }}</span>
+              <span><strong>{{ asset.name }}</strong><small>{{ asset.type }}</small></span>
+              <span v-if="activeAssetId === asset.id" class="asset-picker-check" aria-hidden="true">✓</span>
+            </button>
+            <p v-if="!store.assets.length" class="asset-picker-empty">小模型库暂无模型</p>
+          </div>
+
+          <div class="canvas-mode-hint">
+            <strong>{{ toolLabel }}</strong>
+            <span>{{ activeToolHint }}</span>
+          </div>
+
+          <canvas
+            ref="canvasRef"
+            class="edit-canvas"
+            :class="{ panning: pan.active, 'tool-cursor--draw': tool !== 'select' }"
+            width="1200"
+            height="680"
+            @click="onCanvasClick"
+            @dblclick="closeOuter"
+            @mousedown="onMouseDown"
+            @mousemove="onMouseMove"
+            @mouseleave="onMouseUp"
+            @mouseup="onMouseUp"
+            @wheel.prevent="onWheel"
+          ></canvas>
+
+          <div class="canvas-footer">
+            <div class="file-state tool-status" role="status" aria-live="polite">{{ status }}</div>
+            <div class="canvas-scale"><span class="scale-rule"></span><span>10 m</span></div>
+          </div>
+        </div>
       </article>
+
+      <aside class="panel editor-properties" aria-label="属性面板">
+        <header class="properties-header">
+          <h2>属性面板</h2>
+          <span>按需显示</span>
+        </header>
+
+        <section class="property-section selected-property">
+          <h3>选中对象</h3>
+          <div class="selected-object-card">
+            <span class="selected-object-mark" aria-hidden="true">{{ selectedObjectMark }}</span>
+            <div><strong>{{ selectedObjectName }}</strong><small>{{ selectedObjectType }}</small></div>
+          </div>
+          <button class="delete-object-button" :disabled="!selected && !pendingOuter" @click="deleteSelected">
+            <span aria-hidden="true">⌫</span> 删除此对象
+          </button>
+        </section>
+
+        <section class="property-section floor-property">
+          <h3>楼层信息</h3>
+          <div class="property-value"><span>楼层名称</span><strong>{{ store.activeFloor.name }}</strong></div>
+          <div class="property-value"><span>层高</span><strong>{{ Number(store.activeFloor.height || 0).toFixed(1) }} m</strong></div>
+          <div class="floor-description">
+            <span>楼层描述</span>
+            <p>{{ store.activeFloor.note || '尚未填写楼层描述' }}</p>
+          </div>
+        </section>
+
+        <section class="property-section layer-property">
+          <h3>图层</h3>
+          <div v-for="layer in layerRows" :key="layer.key" class="layer-row">
+            <span class="layer-dot" :class="`layer-dot--${layer.key}`" aria-hidden="true"></span>
+            <span>{{ layer.label }}</span><strong>{{ layer.count }}</strong>
+          </div>
+        </section>
+
+        <section class="property-section canvas-property">
+          <h3>画布视图</h3>
+          <button class="ghost reset-view-button" @click="resetView">重置视图</button>
+          <div class="tool-more" :class="{ 'is-open': showResetActions }">
+            <button
+              type="button"
+              class="tool-more-toggle"
+              :aria-expanded="showResetActions"
+              aria-controls="reset-recovery-actions"
+              @click="toggleResetActions"
+            >
+              <span>重置与恢复</span>
+            </button>
+            <div v-show="showResetActions" id="reset-recovery-actions" ref="resetActionsRef" class="tool-more-actions">
+              <button class="danger ghost" @click="resetCanvas">重置画布</button>
+              <button class="ghost" @click="resetPlan">重置为初始框架</button>
+            </div>
+          </div>
+        </section>
+      </aside>
     </div>
   </section>
 </template>
@@ -56,17 +160,71 @@ const pendingOuter = ref(null)
 const pendingWall = ref(null)
 const selected = ref(null)
 const selectedAssetInstance = ref(null)
+const showResetActions = ref(false)
+const resetActionsRef = ref(null)
+const showAssetPicker = ref(false)
 const metersPerPixel = 0.08
 const view = reactive({ zoom: 1, offsetX: 0, offsetY: 0 })
 const pan = reactive({ active: false, moved: false, startX: 0, startY: 0, offsetX: 0, offsetY: 0 })
 const tools = [
   { key: 'select', label: '选择' },
-  { key: 'outer', label: '外墙轮廓' },
-  { key: 'inner', label: '内部框架' },
+  { key: 'outer', label: '外墙' },
+  { key: 'inner', label: '内部' },
   { key: 'door', label: '门' },
-  { key: 'asset', label: '添加小模型' }
+  { key: 'asset', label: '小模型' }
 ]
 const toolLabel = computed(() => tools.find((item) => item.key === tool.value)?.label)
+const activeToolHint = computed(() => ({
+  select: '点选画布中的对象。',
+  outer: '依次描点，双击完成外墙轮廓。',
+  inner: '点击起点和终点绘制内部墙线。',
+  door: '靠近墙线点击，门会自动吸附。',
+  asset: activeAssetId.value ? `点击画布放置：${store.assets.find((item) => item.id === activeAssetId.value)?.name || '小模型'}` : '先从已有模型中选择。'
+}[tool.value] || '选择工具后在画布上操作。'))
+const selectedObjectName = computed(() => {
+  if (!selected.value) return pendingOuter.value ? '未闭合外墙' : '未选择对象'
+  const plan = store.activeFloor.plan
+  if (selected.value.type === 'asset') return plan.assets.find((item) => item.instanceId === selected.value.id)?.name || selected.value.label
+  if (selected.value.type === 'building') return plan.buildings.find((item) => item.id === selected.value.id)?.name || selected.value.label
+  return selected.value.label
+})
+const selectedObjectType = computed(() => ({
+  asset: '小模型', door: '门', wall: '内部墙线', building: '外墙轮廓', pendingOuter: '未闭合轮廓'
+}[selected.value?.type] || (pendingOuter.value ? '正在绘制' : '点击画布选择对象')))
+const selectedObjectMark = computed(() => ({ asset: '◆', door: '⌑', wall: '／', building: '▰', pendingOuter: '…' }[selected.value?.type] || (pendingOuter.value ? '…' : '↖')))
+const layerRows = computed(() => {
+  const plan = store.activeFloor.plan
+  return [
+    { key: 'space', label: '空间区域', count: plan.rooms?.length || 0 },
+    { key: 'outer', label: '外墙轮廓', count: plan.buildings?.length || 0 },
+    { key: 'wall', label: '内部墙线', count: plan.walls?.length || 0 },
+    { key: 'door', label: '门', count: plan.doors?.length || 0 },
+    { key: 'asset', label: '小模型', count: plan.assets?.length || 0 }
+  ]
+})
+
+function toggleResetActions() {
+  showResetActions.value = !showResetActions.value
+  if (!showResetActions.value) return
+
+  nextTick(() => {
+    const lastAction = resetActionsRef.value?.lastElementChild
+    lastAction?.scrollIntoView({ block: 'nearest', behavior: 'auto' })
+  })
+}
+
+function activateTool(item) {
+  tool.value = item.key
+  showAssetPicker.value = item.key === 'asset'
+  if (item.key !== 'asset') status.value = `${item.label}工具已选中。`
+}
+
+function chooseAsset(asset) {
+  activeAssetId.value = asset.id
+  tool.value = 'asset'
+  showAssetPicker.value = false
+  status.value = `已选择${asset.name}，点击画布放置。`
+}
 
 onMounted(() => {
   window.addEventListener('mouseup', onMouseUp)
@@ -101,11 +259,16 @@ function draw() {
   const g = ctx()
   g.setTransform(1, 0, 0, 1, 0, 0)
   g.clearRect(0, 0, c.width, c.height)
-  g.fillStyle = '#fbfdff'
+  g.fillStyle = '#fbfcfe'
   g.fillRect(0, 0, c.width, c.height)
-  g.strokeStyle = '#e4ebf3'
-  for (let x = 0; x < c.width; x += 28) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, c.height); g.stroke() }
-  for (let y = 0; y < c.height; y += 28) { g.beginPath(); g.moveTo(0, y); g.lineTo(c.width, y); g.stroke() }
+  g.fillStyle = '#d8e1eb'
+  for (let x = 14; x < c.width; x += 28) {
+    for (let y = 14; y < c.height; y += 28) {
+      g.beginPath()
+      g.arc(x, y, 1.15, 0, Math.PI * 2)
+      g.fill()
+    }
+  }
   g.setTransform(view.zoom, 0, 0, view.zoom, view.offsetX, view.offsetY)
   const plan = store.activeFloor.plan
   plan.buildings.forEach((building) => drawPolygon(g, building.outer, building.closed, '#2674ad'))
@@ -316,39 +479,37 @@ function drawDot(g, x, y, color, text, selectedDot = false) {
   g.textAlign = 'left'
 }
 function drawOverlay(g, c) {
-  const cx = c.width / 2 + view.offsetX
-  const cy = c.height / 2 + view.offsetY
   g.save()
-  g.strokeStyle = 'rgba(120,132,148,.42)'
-  g.setLineDash([8, 8])
+  const px = 10 / metersPerPixel * view.zoom
+  const startX = 30
+  const y = c.height - 32
+  g.strokeStyle = '#7c8da2'
+  g.lineWidth = 2
   g.beginPath()
-  g.moveTo(cx, 0)
-  g.lineTo(cx, c.height)
-  g.moveTo(0, cy)
-  g.lineTo(c.width, cy)
+  g.moveTo(startX, y)
+  g.lineTo(startX + px, y)
+  g.moveTo(startX, y - 5)
+  g.lineTo(startX, y + 5)
+  g.moveTo(startX + px, y - 5)
+  g.lineTo(startX + px, y + 5)
   g.stroke()
-  g.setLineDash([])
-  g.fillStyle = 'rgba(255,255,255,.92)'
-  roundRect(g, 18, c.height - 84, 206, 60, 8, true, true)
-  const px = 50 / metersPerPixel * view.zoom
-  g.strokeStyle = '#4b5563'
-  g.lineWidth = 3
-  g.beginPath()
-  g.moveTo(38, c.height - 49)
-  g.lineTo(38 + px, c.height - 49)
-  g.moveTo(38, c.height - 57)
-  g.lineTo(38, c.height - 41)
-  g.moveTo(38 + px, c.height - 57)
-  g.lineTo(38 + px, c.height - 41)
-  g.stroke()
-  g.fillStyle = '#4b5563'
-  g.font = '15px Microsoft YaHei'
-  g.textAlign = 'center'
-  g.fillText(`50 m · ${Math.round(view.zoom * 100)}%`, 38 + px / 2, c.height - 22)
-  g.fillStyle = '#9aa6b2'
+  g.fillStyle = '#73839a'
   g.font = '13px Microsoft YaHei'
-  g.fillText('(0, 0)', cx + 28, cy - 8)
   g.textAlign = 'left'
+  g.fillText('10 m', startX + px + 9, y + 4)
+  g.strokeStyle = '#8494a8'
+  g.lineWidth = 1.5
+  g.beginPath()
+  g.moveTo(c.width - 34, 54)
+  g.lineTo(c.width - 34, 28)
+  g.lineTo(c.width - 40, 36)
+  g.moveTo(c.width - 34, 28)
+  g.lineTo(c.width - 28, 36)
+  g.stroke()
+  g.fillStyle = '#75859b'
+  g.font = '11px Arial'
+  g.textAlign = 'center'
+  g.fillText('N', c.width - 34, 20)
   g.restore()
 }
 function roundRect(g, x, y, w, h, r, fill, stroke) {
@@ -391,6 +552,12 @@ function onCanvasClick(event) {
     status.value = snapped.segment.type === 'building' ? '门已吸附到外墙并切出门洞。' : '门已吸附到内部墙并切出门洞。'
   } else if (tool.value === 'asset') {
     const asset = store.assets.find((item) => item.id === activeAssetId.value) || store.assets[0]
+    if (!asset) {
+      showAssetPicker.value = true
+      status.value = '小模型库暂无模型。'
+      draw()
+      return
+    }
     plan.assets.push({ ...asset, instanceId: `asset-${Date.now()}`, x: p.x, y: p.y })
   } else {
     selected.value = pickObject(p)
@@ -472,10 +639,6 @@ function resetView() {
   draw()
 }
 
-function canvasCenter() {
-  return { x: canvasRef.value.width / 2, y: canvasRef.value.height / 2 }
-}
-
 function onWheel(event) {
   zoomAt(event.deltaY < 0 ? 1.12 : 0.89, getCanvasScreenPoint(event))
 }
@@ -541,13 +704,4 @@ function hitPolygon(point, points = []) {
   return inside
 }
 
-function downloadJson(filename, data) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  link.click()
-  URL.revokeObjectURL(url)
-}
 </script>
